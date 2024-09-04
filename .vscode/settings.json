@@ -1,0 +1,10 @@
+{
+    "C_Cpp.errorSquiggles": "disabled",
+    "files.associations": {
+        "tasks_common.h": "c",
+        "ssd1306.h": "c",
+        "lvgl.h": "c",
+        "esp_lvgl_port.h": "c",
+        "inmp441.h": "c"
+    }
+}
