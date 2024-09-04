@@ -42,8 +42,8 @@ O dispositivo detecta sons ambientais e notifica o usuário sobre possíveis per
 
 ## Contato
 Para mais informações, entre em contato
-**e-mail: phlangone@gmail.com**
-**username: phlangone**
+- **e-mail**: phlangone@gmail.com
+- **username**: phlangone
 
 
 
