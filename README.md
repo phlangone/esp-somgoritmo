@@ -36,4 +36,15 @@ O dispositivo detecta sons ambientais e notifica o usuário sobre possíveis per
 ## Instalação
 
 1. **Clone o repositório:**
+2. **Instale as dependências necessárias.**
+3. **Configure o ambiente conforme as instruções no arquivo config.h.**
+4. **Compile e faça o upload do código para o microcontrolador.**
+
+## Contato
+Para mais informações, entre em contato
+**e-mail: phlangone@gmail.com**
+**username: phlangone**
+
+
+
 
