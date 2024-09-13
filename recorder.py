@@ -16,72 +16,26 @@ Parâmetros:
     --ip, -i   : Endereço IP no qual o servidor irá escutar. Se não for fornecido, o IP local será usado.
     --port, -p : Porta na qual o servidor irá escutar. Se não for fornecido, a porta padrão é 8000.
 """
-import os
-import time
-import sys
-import numpy as np
 
+import os
+import datetime
+import sys
+import wave
 import argparse
 import socket
-from urllib import parse
-from http.server import HTTPServer, BaseHTTPRequestHandler
 
-import librosa
-import soundfile as sf
-import wave
-from scipy.signal import firwin, lfilter
+if sys.version_info.major == 3:
+    # Python 3: Importa módulos para manipulação de URLs e servidores HTTP.
+    from urllib import parse
+    from http.server import HTTPServer, BaseHTTPRequestHandler
+else:
+    # Python 2: Importa módulos equivalentes para manipulação de URLs e servidores HTTP.
+    import urlparse
+    from BaseHTTPServer import HTTPServer, BaseHTTPRequestHandler
 
-from tensorflow.keras.models import load_model # type: ignore
-from sklearn.preprocessing import LabelEncoder
+PORT = 8000  # Porta padrão para o servidor HTTP
 
-# Classe para processamento de áudio
-class AudioProcessor:
-    def __init__(self, sr=44100, ordem=100):
-        self.sr = sr  # Taxa de amostragem
-        self.ordem = ordem  # Ordem do filtro FIR
-
-    def aplicar_filtros(self, y):
-        frequencia_corte_baixa = 1000 / (self.sr / 2) # Definição das frequências de corte
-        filtro_passa_baixa_fir = firwin(self.ordem + 1, frequencia_corte_baixa, window='hamming', pass_zero='lowpass') # Criação dos filtros FIR
-        y_passa_baixa_fir = lfilter(filtro_passa_baixa_fir, 1, y) # Aplicação dos filtros FIR
-
-        return y_passa_baixa_fir
-
-    def _write_wav(self, data, rates, bits, ch):
-        timestamp = int(time.time())  
-        filename = f'output_{timestamp}.wav'  
-        wavfile = wave.open(filename, 'wb')
-        wavfile.setparams((ch, int(bits/8), rates, 0, 'NONE', 'NONE'))
-        wavfile.writeframesraw(bytearray(data))
-        wavfile.close()
-        return filename
-
-    def carregar_audio(self, file_data):
-        y, sr = sf.read(file_data)
-        y = y / np.max(np.abs(y))  # Normaliza o sinal para evitar distorção
-        return y, sr
-
-# Classe para classificação de áudio
-class AudioClassifier:
-    def __init__(self, model_path, categorias):
-        self.model = load_model(model_path)
-        self.labelencoder = LabelEncoder()
-        self.labelencoder.fit(categorias)
-
-    def classificar_audio(self, y, sr):
-        mfccs_features = librosa.feature.mfcc(y=y, sr=sr, n_mfcc=40)
-        mfccs_scaled_features = np.mean(mfccs_features.T, axis=0)
-        mfccs_scaled_features = mfccs_scaled_features.reshape(1, -1)
-        mfccs_scaled_features = mfccs_scaled_features[:, :, np.newaxis]
-
-        prediction = self.model.predict(mfccs_scaled_features)
-        prediction = prediction.argmax(axis=1)
-        prediction = prediction.astype(int).flatten()
-        prediction = self.labelencoder.inverse_transform((prediction))
-
-        return prediction[0]
-
-class HTTPRequestHandler(BaseHTTPRequestHandler):
+class Handler(BaseHTTPRequestHandler):
     """
     Classe que lida com requisições HTTP, herda de BaseHTTPRequestHandler.
     
@@ -122,11 +76,34 @@ class HTTPRequestHandler(BaseHTTPRequestHandler):
         self.rfile.read(2)
         return data
 
+    def _write_wav(self, data, rates, bits, ch):
+        """
+        Salva os dados recebidos em um arquivo WAV.
+
+        :param data: Dados de áudio a serem salvos.
+        :param rates: Taxa de amostragem do áudio.
+        :param bits: Número de bits por amostra.
+        :param ch: Número de canais de áudio.
+        :return: Nome do arquivo WAV salvo.
+        """
+        t = datetime.datetime.utcnow()
+        time = t.strftime('%Y%m%dT%H%M%SZ')
+        filename = str.format('{}_{}_{}_{}.wav', time, rates, bits, ch)
+
+        wavfile = wave.open(filename, 'wb')
+        wavfile.setparams((ch, int(bits/8), rates, 0, 'NONE', 'NONE'))
+        wavfile.writeframesraw(bytearray(data))
+        wavfile.close()
+        return filename
+
     def do_POST(self):
         """
         Processa requisições POST para salvar dados de áudio em um arquivo WAV.
         """
-        urlparts = parse.urlparse(self.path)
+        if sys.version_info.major == 3:
+            urlparts = parse.urlparse(self.path)
+        else:
+            urlparts = urlparse.urlparse(self.path)
 
         request_file_path = urlparts.path.strip('/')
         total_bytes = 0
@@ -142,6 +119,8 @@ class HTTPRequestHandler(BaseHTTPRequestHandler):
             bits = self.headers.get('x-audio-bits', '').lower()
             channel = self.headers.get('x-audio-channel', '').lower()
 
+            print("Informações de áudio, taxa de amostragem: {}, bits: {}, canais: {}".format(sample_rates, bits, channel))
+            
             while True:
                 chunk_size = self._get_chunk_size()
                 total_bytes += chunk_size
@@ -153,31 +132,13 @@ class HTTPRequestHandler(BaseHTTPRequestHandler):
                     chunk_data = self._get_chunk_data(chunk_size)
                     data += chunk_data
 
-            print("Salvando WAV...")
-            # Salva WAV
-            filename = audio_processor._write_wav(data, int(sample_rates), int(bits), int(channel))
-
-            print("Carregando WAV...")
-            # Carrega WAV para aplicar filtros
-            y, sr = audio_processor.carregar_audio(filename)
-
-            print("Aplicando filtros...")
-            # Aplica filtros no arquivo WAV
-            y_filtred = audio_processor.aplicar_filtros(y)
-
-            print("Realizando classificação...")
-            # Realiza a classificação
-            response = audio_classifier.classificar_audio(y_filtred, sr)
-
-            print(f'Classificação/resultado: {response}')
-
-            # Remove o arquivo após o processamento (limpeza automática)
-            os.remove(filename)
-
+            filename = self._write_wav(data, int(sample_rates), int(bits), int(channel))
             self.send_response(200)
-            self.send_header("Content-type", "text/plain")
+            self.send_header("Content-type", "text/html;charset=utf-8")
+            self.send_header("Content-Length", str(total_bytes))
             self.end_headers()
-            self.wfile.write(f'Classificação/resultado: {response}'.encode('utf-8'))
+            body = 'Arquivo {} foi salvo, tamanho {}'.format(filename, total_bytes)
+            self.wfile.write(body.encode('utf-8'))
 
     def do_GET(self):
         """
@@ -189,16 +150,18 @@ class HTTPRequestHandler(BaseHTTPRequestHandler):
         self.end_headers()
 
 def get_host_ip():
+    """
+    Obtém o IP do host local.
+
+    :return: IP do host local.
+    """
     try:
-        s=socket.socket(socket.AF_INET,socket.SOCK_DGRAM)
-        s.connect(('8.8.8.8',80))
-        ip=s.getsockname()[0]
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(('8.8.8.8', 80))
+        ip = s.getsockname()[0]
     finally:
         s.close()
     return ip
-
-
-PORT = 8000  
 
 parser = argparse.ArgumentParser(description='Servidor HTTP que salva dados de áudio em arquivos WAV.')
 parser.add_argument('--ip', '-i', nargs='?', type=str)
@@ -210,20 +173,11 @@ if not args.ip:
 if not args.port:
     args.port = PORT
 
-
-audio_processor = AudioProcessor(sr=44100)
-
-audio_classifier = AudioClassifier('weights.keras', categorias=[
-                                                                'motor_em_marcha_lenta', 'latido_de_cachorro',
-                                                                'crianca_brincando', 'perfuracao', 'musica_de_rua', 'ar_condicionado',
-                                                                'britadeira', 'sirene', 'buzina_de_carro', 'tiro_de_arma'])
-
-httpd = HTTPServer((args.ip, args.port), HTTPRequestHandler)
+httpd = HTTPServer((args.ip, args.port), Handler)
 
 try:
     print("Servindo HTTP em {} na porta {}".format(args.ip, args.port))
     httpd.serve_forever()
 except KeyboardInterrupt:
     print("\nServidor interrompido pelo usuário")
-    httpd.server_close()
-
+    httpd.server_close()  # Fecha o servidor de forma limpa
